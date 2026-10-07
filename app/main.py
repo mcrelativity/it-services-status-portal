@@ -46,6 +46,7 @@ def index(request: Request):
             "version": current_version(),
             "environment": os.getenv("APP_ENV", "production"),
             "deployed_at": deployed_at(),
+            "summary": service_summary(),
         },
     )
 
@@ -61,4 +62,5 @@ def services():
         "services": SERVICES,
         "version": current_version(),
         "environment": os.getenv("APP_ENV", "production"),
+        "summary": service_summary(),
     }
