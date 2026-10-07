@@ -36,6 +36,11 @@ def deployed_at() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def service_summary() -> dict[str, int]:
+    operational = sum(service["status"] == "Operativo" for service in SERVICES)
+    return {"operational": operational, "total": len(SERVICES)}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse(
@@ -46,6 +51,7 @@ def index(request: Request):
             "version": current_version(),
             "environment": os.getenv("APP_ENV", "production"),
             "deployed_at": deployed_at(),
+            "summary": service_summary(),
         },
     )
 
@@ -61,4 +67,5 @@ def services():
         "services": SERVICES,
         "version": current_version(),
         "environment": os.getenv("APP_ENV", "production"),
+        "summary": service_summary(),
     }

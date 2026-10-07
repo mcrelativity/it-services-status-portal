@@ -24,3 +24,11 @@ def test_home_page_renders():
     response = client.get("/")
     assert response.status_code == 200
     assert "Portal de Estado de Servicios TI" in response.text
+
+
+def test_services_summary():
+    response = client.get("/api/services")
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["operational"] == 4
+    assert summary["total"] == 4
