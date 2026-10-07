@@ -1,5 +1,5 @@
+from datetime import UTC, datetime
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -33,7 +33,7 @@ def deployed_at() -> str:
     value = os.getenv("DEPLOYED_AT")
     if value:
         return value
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 @app.get("/", response_class=HTMLResponse)
