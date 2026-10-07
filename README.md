@@ -1,10 +1,32 @@
-# Portal de Estado de Servicios TI
+# Portal de Monitoreo de Servicios TI
 
 Proyecto individual para demostrar una solución DevOps CI/CD desplegada en AWS mediante Infraestructura como Código.
 
+## ¿Qué hace la aplicación?
+
+El portal realiza **chequeos HTTP reales** sobre cuatro servicios públicos relacionados con el desarrollo y despliegue del proyecto:
+
+| Servicio | Motivo del monitoreo | Endpoint |
+|---|---|---|
+| GitHub API | Repositorio y automatización CI/CD | `https://api.github.com` |
+| PyPI | Registro de dependencias Python | `https://pypi.org/pypi/fastapi/json` |
+| Python.org | Sitio oficial del lenguaje utilizado | `https://www.python.org/` |
+| AWS | Proveedor Cloud de la solución | `https://aws.amazon.com/` |
+
+Cada vez que se abre la página o se consulta `/api/services`, FastAPI ejecuta los chequeos en paralelo. Para cada servicio registra:
+
+- código HTTP;
+- latencia en milisegundos;
+- fecha/hora UTC del chequeo;
+- estado `Operativo` o `No disponible`.
+
+Un servicio se considera operativo cuando responde con HTTP 200–399 dentro de 3 segundos. El objetivo es demostrar monitoreo funcional sin utilizar credenciales ni sistemas privados.
+
+> La solución es académica y no representa monitoreo productivo de una organización real.
+
 ## Caso de estudio
 
-Una organización requiere un portal web liviano que permita consultar el estado operativo de servicios tecnológicos institucionales. El proyecto se enfoca en la automatización del ciclo de integración y entrega, no en la complejidad funcional de la aplicación.
+Una organización requiere un portal liviano que permita comprobar, desde una sola interfaz, la disponibilidad de dependencias web utilizadas por su equipo TI. El proyecto se enfoca además en automatizar integración, pruebas, construcción de contenedores y despliegue mediante CI/CD.
 
 ## Requerimientos técnicos
 
@@ -14,7 +36,7 @@ Una organización requiere un portal web liviano que permita consultar el estado
 | Framework | FastAPI |
 | Puerto contenedor | 8000 |
 | Puerto público | 80 |
-| Persistencia | No requerida: la aplicación no administra datos transaccionales |
+| Persistencia | No requerida |
 | Variables de entorno | `APP_ENV`, `APP_VERSION`, `DEPLOYED_AT` |
 | Contenedor | Docker |
 | Registro | Amazon ECR |
@@ -22,104 +44,50 @@ Una organización requiere un portal web liviano que permita consultar el estado
 | Ejecución | Amazon EC2 `t4g.micro` + Docker |
 | IaC | AWS CloudFormation |
 | CI/CD | GitHub Actions |
-| Autenticación CI/CD | GitHub OIDC hacia AWS IAM, sin access keys persistentes |
-
-## Alcance y usuarios
-
-La solución publica una interfaz de consulta y endpoints de salud/servicios. Los usuarios previstos son personal interno y el docente evaluador. No existe autenticación de usuarios porque el contenido es únicamente demostrativo y no contiene información sensible.
+| Autenticación CI/CD | GitHub OIDC hacia AWS IAM |
 
 ## Endpoints
 
-- `/`: interfaz web.
-- `/health`: estado de la aplicación y versión desplegada.
-- `/api/services`: estado de servicios en JSON.
+- `/`: tablero visual y explicación del funcionamiento.
+- `/health`: health check del propio contenedor.
+- `/api/services`: resultado JSON de los chequeos HTTP.
 
 ## Estrategia Git
 
-Se utiliza GitHub Flow:
+Se utiliza GitHub Flow. `main` representa la versión estable y los cambios se desarrollan en ramas `feature/*`, `fix/*` o `docs/*`. Se utilizan Pull Requests y commits con Conventional Commits.
 
-1. `main` representa la versión estable.
-2. Cada cambio se desarrolla en una rama `feature/*`, `fix/*` o `docs/*`.
-3. Los cambios se incorporan mediante Pull Request.
-4. CI debe finalizar correctamente antes del merge.
-5. Los commits siguen Conventional Commits (`feat:`, `fix:`, `test:`, `ci:`, `docs:`, `infra:`).
-
-> El proyecto es individual. Por esta razón, no existe un segundo integrante disponible para aprobar Pull Requests. Se mantiene de todas formas el flujo de PR, validación automática y trazabilidad.
+El proyecto es individual. Por esta razón no existe un segundo integrante disponible para aprobar Pull Requests; se conserva de todas formas la trazabilidad mediante ramas, PR y validación automática.
 
 ## CI
 
-El workflow `.github/workflows/ci.yml` ejecuta:
-
-1. instalación de dependencias;
-2. análisis estático con Ruff;
-3. auditoría de dependencias con pip-audit;
-4. pruebas con Pytest;
-5. construcción de la imagen Docker.
+`.github/workflows/ci.yml` ejecuta instalación de dependencias, Ruff, pip-audit, Pytest y construcción de la imagen Docker. Un error en cualquiera de estas etapas detiene el pipeline.
 
 ## CD
 
-El workflow `.github/workflows/cd.yml` se ejecuta automáticamente tras integrar cambios en `main`. La versión desplegada se obtiene del archivo `VERSION` y utiliza SemVer, por ejemplo `v1.0.0` y `v1.1.0`.
+`.github/workflows/cd.yml` se ejecuta al integrar cambios en `main`:
 
-1. GitHub valida el valor SemVer declarado en `VERSION`.
-2. GitHub obtiene credenciales temporales mediante OIDC.
-3. Se construye la imagen ARM64.
-4. La imagen versionada se publica en Amazon ECR.
-5. GitHub Actions localiza la instancia por tag.
-6. AWS Systems Manager ejecuta el despliegue sin necesidad de abrir SSH.
-7. Se valida `/health` dentro de la instancia y desde la URL pública.
+1. resuelve la versión SemVer del archivo `VERSION`;
+2. obtiene credenciales AWS temporales mediante OIDC;
+3. construye la imagen ARM64;
+4. publica la imagen versionada en Amazon ECR;
+5. localiza la instancia EC2 por tag;
+6. despliega mediante AWS Systems Manager;
+7. valida `/health` desde la instancia y desde la URL pública.
 
 ## Infraestructura como Código
 
-`infra/cloudformation.yml` declara toda la infraestructura requerida:
+`infra/cloudformation.yml` declara VPC, subnet pública, Internet Gateway, routing, Security Group, ECR, IAM, Instance Profile y EC2. La infraestructura puede aprovisionarse y eliminarse desde el mismo código.
 
-- VPC;
-- subnet pública;
-- Internet Gateway y routing;
-- Security Group;
-- Amazon ECR;
-- roles IAM de EC2 y GitHub Actions;
-- Instance Profile;
-- instancia EC2 ARM64;
-- instalación automatizada de Docker mediante User Data.
+## Versiones
 
-### Aprovisionamiento
-
-```bash
-aws cloudformation deploy \
-  --template-file infra/cloudformation.yml \
-  --stack-name devops-status-portal \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --region us-east-1
-```
-
-### Eliminación
-
-```bash
-aws cloudformation delete-stack \
-  --stack-name devops-status-portal \
-  --region us-east-1
-```
-
-## Versiones evaluables
-
-- `v1.0.0`: portal inicial, `/health` y API de servicios.
-- `v1.1.0`: segunda versión sucesiva con una mejora visible que se incorporará mediante Pull Request y nuevo despliegue.
-
-## Evidencias
-
-Las evidencias se almacenan/documentan en `docs/evidencias/` y deben incluir historial Git, PR, CI, ECR, CloudFormation, EC2, CD, ambas versiones y URL funcional.
+- `v1.0.0`: portal inicial y health check.
+- `v1.1.0`: resumen de servicios operativos.
+- `v1.2.0`: monitoreo HTTP real, código HTTP, latencia, hora de comprobación y explicación visible del funcionamiento.
 
 ## Seguridad
 
-- No se almacenan credenciales AWS en el repositorio.
-- GitHub Actions utiliza OIDC y credenciales temporales.
+- No se guardan Access Keys en el repositorio.
+- GitHub Actions usa OIDC y credenciales temporales.
 - EC2 no expone SSH.
-- El despliegue remoto utiliza AWS Systems Manager.
-- El volumen EBS se cifra.
-- IMDSv2 es obligatorio.
-- ECR realiza análisis de imágenes al publicarlas.
-
-## Arquitectura y pipeline
-
-- [Arquitectura](diagrams/architecture.md)
-- [Pipeline](diagrams/pipeline.md)
+- El despliegue remoto usa Systems Manager.
+- EBS está cifrado e IMDSv2 es obligatorio.

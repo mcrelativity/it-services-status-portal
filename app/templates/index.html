@@ -3,39 +3,93 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Portal de Estado de Servicios TI</title>
+  <title>Portal de Monitoreo de Servicios TI</title>
   <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
 </head>
 <body>
   <main class="container">
-    <header>
-      <p class="eyebrow">MONITOREO INSTITUCIONAL</p>
-      <h1>Portal de Estado de Servicios TI</h1>
-      <p class="subtitle">Estado operativo de los principales servicios tecnológicos.</p>
+    <header class="hero">
+      <p class="eyebrow">PROYECTO DEVOPS · MONITOREO HTTP</p>
+      <h1>Portal de Monitoreo de Servicios TI</h1>
+      <p class="subtitle">
+        Esta aplicación comprueba si servicios externos utilizados por el proyecto están disponibles.
+        Cada vez que se abre o actualiza esta página, el servidor realiza una solicitud HTTP real a cada endpoint
+        y registra código de respuesta, latencia y hora del chequeo.
+      </p>
+      <div class="notice">
+        <strong>¿Qué significa “Operativo”?</strong>
+        El endpoint respondió con un código HTTP entre 200 y 399 dentro de {{ timeout_seconds }} segundos.
+        Si no responde, excede el tiempo máximo o devuelve un error HTTP, se marca como “No disponible”.
+      </div>
     </header>
 
-    <section class="summary" aria-label="Resumen de despliegue">
+    <section class="summary" aria-label="Resumen del monitoreo">
       <div><span>Ambiente</span><strong>{{ environment }}</strong></div>
-      <div><span>Versión</span><strong>{{ version }}</strong></div>
+      <div><span>Versión desplegada</span><strong>{{ version }}</strong></div>
       <div><span>Servicios operativos</span><strong>{{ summary.operational }}/{{ summary.total }}</strong></div>
-      <div><span>Desplegado</span><strong>{{ deployed_at }}</strong></div>
+      <div><span>Método</span><strong>HTTP GET</strong></div>
+    </section>
+
+    <section class="explanation">
+      <h2>¿Qué servicios se monitorean?</h2>
+      <p>
+        Se supervisan dependencias públicas relacionadas con el desarrollo y despliegue de la solución:
+        GitHub API, PyPI, Python.org y AWS. El objetivo es demostrar monitoreo real sin utilizar
+        credenciales ni sistemas privados. Este es un entorno académico y no representa monitoreo productivo de una empresa.
+      </p>
     </section>
 
     <section class="services">
       {% for service in services %}
       <article class="service-card">
-        <div>
-          <h2>{{ service.name }}</h2>
-          <p>Servicio supervisado</p>
+        <div class="service-main">
+          <div class="service-heading">
+            <h2>{{ service.name }}</h2>
+            <span class="status {{ 'status-ok' if service.status == 'Operativo' else 'status-error' }}">
+              {{ service.status }}
+            </span>
+          </div>
+          <p class="description">{{ service.description }}</p>
+          <code>{{ service.url }}</code>
         </div>
-        <span class="status">{{ service.status }}</span>
+        <dl class="metrics">
+          <div>
+            <dt>Código HTTP</dt>
+            <dd>{{ service.http_code if service.http_code is not none else 'Sin respuesta' }}</dd>
+          </div>
+          <div>
+            <dt>Latencia</dt>
+            <dd>{{ service.latency_ms }} ms</dd>
+          </div>
+          <div>
+            <dt>Último chequeo</dt>
+            <dd>{{ service.checked_at }}</dd>
+          </div>
+        </dl>
       </article>
       {% endfor %}
     </section>
 
+    <section class="how">
+      <h2>¿Cómo funciona?</h2>
+      <ol>
+        <li>El usuario abre la página o consulta <code>/api/services</code>.</li>
+        <li>FastAPI ejecuta en paralelo un chequeo HTTP a los cuatro endpoints.</li>
+        <li>Se mide el tiempo de respuesta y se obtiene el código HTTP.</li>
+        <li>La aplicación clasifica el resultado y muestra la evidencia del chequeo.</li>
+        <li>La versión del software se despliega automáticamente desde GitHub Actions hacia AWS.</li>
+      </ol>
+    </section>
+
     <footer>
-      <span>FastAPI · Docker · GitHub Actions · AWS · CloudFormation</span>
-      <a href="/health">Health check</a>
+      <div>
+        <strong>Stack:</strong> FastAPI · Docker · GitHub Actions · Amazon ECR · EC2 · CloudFormation
+      </div>
+      <div class="footer-links">
+        <a href="/api/services">API de monitoreo</a>
+        <a href="/health">Health check de la app</a>
+      </div>
+      <small>Despliegue: {{ deployed_at }}</small>
     </footer>
   </main>
 </body>
