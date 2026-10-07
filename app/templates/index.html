@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portal de Estado de Servicios TI</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+</head>
+<body>
+  <main class="container">
+    <header>
+      <p class="eyebrow">MONITOREO INSTITUCIONAL</p>
+      <h1>Portal de Estado de Servicios TI</h1>
+      <p class="subtitle">Estado operativo de los principales servicios tecnológicos.</p>
+    </header>
+
+    <section class="summary" aria-label="Resumen de despliegue">
+      <div><span>Ambiente</span><strong>{{ environment }}</strong></div>
+      <div><span>Versión</span><strong>{{ version }}</strong></div>
+      <div><span>Desplegado</span><strong>{{ deployed_at }}</strong></div>
+    </section>
+
+    <section class="services">
+      {% for service in services %}
+      <article class="service-card">
+        <div>
+          <h2>{{ service.name }}</h2>
+          <p>Servicio supervisado</p>
+        </div>
+        <span class="status">{{ service.status }}</span>
+      </article>
+      {% endfor %}
+    </section>
+
+    <footer>
+      <span>FastAPI · Docker · GitHub Actions · AWS · CloudFormation</span>
+      <a href="/health">Health check</a>
+    </footer>
+  </main>
+</body>
+</html>
