@@ -14,6 +14,12 @@ Parameters:
   GitHubRepo:
     Type: String
     Default: it-services-status-portal
+  GitHubOwnerId:
+    Type: String
+    Default: '209178709'
+  GitHubRepoId:
+    Type: String
+    Default: '1408051202'
   InstanceType:
     Type: String
     Default: t4g.micro
@@ -176,7 +182,7 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOwner}/${GitHubRepo}:*'
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:*'
       Policies:
         - PolicyName: DeployApplication
           PolicyDocument:
