@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - 'feature/**'
+      - 'fix/**'
+      - 'docs/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Lint, audit, tests and container build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Static analysis with Ruff
+        run: ruff check .
+
+      - name: Dependency security audit
+        run: pip-audit -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build Docker image
+        run: docker build -t devops-status-portal:ci .
