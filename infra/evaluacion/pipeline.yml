@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Pipeline de validacion disparado por la publicacion de una revision en S3
+Parameters:
+  ArtifactBucket: {Type: String}
+  AuditBucket: {Type: String}
+  PortalUrl: {Type: String}
+  FunctionName: {Type: String}
+  ApiId: {Type: String}
+Resources:
+  BuildLog:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/codebuild/${AWS::StackName}', RetentionInDays: 14}
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: codebuild.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${AWS::StackName}'
+      Policies:
+        - PolicyName: Tests
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}:log-stream:*'
+              - Effect: Allow
+                Action: ['s3:GetObject', 's3:GetObjectVersion']
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${ArtifactBucket}/${AWS::StackName}/*'
+              - Effect: Allow
+                Action: ['s3:GetBucketLocation', 's3:GetBucketAcl']
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${ArtifactBucket}'
+              - Effect: Allow
+                Action: ['lambda:GetFunctionConfiguration', 'lambda:ListFunctionUrlConfigs']
+                Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${FunctionName}'
+              - Effect: Allow
+                Action: 'apigateway:GET'
+                Resource: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/${ApiId}/routes'
+  Build:
+    Type: AWS::CodeBuild::Project
+    DependsOn: BuildLog
+    Properties:
+      Name: !Ref AWS::StackName
+      Description: Valida IaC y prueba portal, revision y limites en AWS
+      ServiceRole: !GetAtt BuildRole.Arn
+      TimeoutInMinutes: 15
+      ConcurrentBuildLimit: 1
+      Artifacts: {Type: CODEPIPELINE}
+      Source: {Type: CODEPIPELINE, BuildSpec: buildspec.yml}
+      LogsConfig:
+        CloudWatchLogs: {Status: ENABLED, GroupName: !Ref BuildLog}
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Type: LINUX_CONTAINER
+        Image: 'aws/codebuild/standard:7.0'
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - {Name: PORTAL_URL, Value: !Ref PortalUrl}
+          - {Name: PORTAL_FUNCTION, Value: !Ref FunctionName}
+          - {Name: PORTAL_API_ID, Value: !Ref ApiId}
+          - {Name: AUDIT_BUCKET, Value: !Ref AuditBucket}
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: codepipeline.amazonaws.com}, Action: 'sts:AssumeRole'}
+      Policies:
+        - PolicyName: Orchestrate
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['s3:GetBucketVersioning', 's3:GetBucketLocation', 's3:GetBucketAcl']
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${ArtifactBucket}'
+              - Effect: Allow
+                Action: ['s3:GetObject', 's3:GetObjectVersion', 's3:GetObjectTagging', 's3:GetObjectVersionTagging']
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${ArtifactBucket}/source/portal.zip'
+              - Effect: Allow
+                Action: ['s3:PutObject', 's3:GetObject', 's3:GetObjectVersion', 's3:PutObjectTagging']
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${ArtifactBucket}/${AWS::StackName}/*'
+              - Effect: Allow
+                Action: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds']
+                Resource: !GetAtt Build.Arn
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Ref AWS::StackName
+      RoleArn: !GetAtt PipelineRole.Arn
+      PipelineType: V1
+      RestartExecutionOnUpdate: false
+      ArtifactStore: {Type: S3, Location: !Ref ArtifactBucket}
+      Stages:
+        - Name: Fuente
+          Actions:
+            - Name: CodigoVersionado
+              ActionTypeId: {Category: Source, Owner: AWS, Provider: S3, Version: '1'}
+              Configuration:
+                S3Bucket: !Ref ArtifactBucket
+                S3ObjectKey: source/portal.zip
+                PollForSourceChanges: 'false'
+              OutputArtifacts: [{Name: PortalSource}]
+              RunOrder: 1
+        - Name: Pruebas
+          Actions:
+            - Name: Validar
+              ActionTypeId: {Category: Build, Owner: AWS, Provider: CodeBuild, Version: '1'}
+              Configuration: {ProjectName: !Ref Build}
+              InputArtifacts: [{Name: PortalSource}]
+              RunOrder: 1
+  EventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: events.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-source'
+      Policies:
+        - PolicyName: StartPortalPipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource: !Sub 'arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+  SourceChanged:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${AWS::StackName}-source'
+      EventPattern:
+        source: [aws.s3]
+        detail-type: ['Object Created']
+        detail:
+          bucket: {name: [!Ref ArtifactBucket]}
+          object: {key: [source/portal.zip]}
+      Targets:
+        - Id: PortalPipeline
+          Arn: !Sub 'arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+          RoleArn: !GetAtt EventRole.Arn
+          InputTransformer:
+            InputPathsMap:
+              version: '$.detail.object.version-id'
+            InputTemplate: '{"sourceRevisions":[{"actionName":"CodigoVersionado","revisionType":"S3_OBJECT_VERSION_ID","revisionValue":<version>}]}'
+Outputs:
+  Pipeline: {Value: !Ref Pipeline}
+  Build: {Value: !Ref Build}
+  Rule: {Value: !Ref SourceChanged}
+

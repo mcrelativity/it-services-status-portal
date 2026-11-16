@@ -114,7 +114,11 @@ def monitor_services() -> list[dict[str, object]]:
         status = "available" if result["status"] == "Operativo" else "unavailable"
         logger.info(
             "service_check %s target=%s code=%s latency_ms=%s checked_at=%s",
-            status, result["name"], result["http_code"], result["latency_ms"], result["checked_at"],
+            status,
+            result["name"],
+            result["http_code"],
+            result["latency_ms"],
+            result["checked_at"],
         )
     return results
 

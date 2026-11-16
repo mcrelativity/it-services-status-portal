@@ -6,4 +6,3 @@ from app.main import app
 
 logging.getLogger("mangum").setLevel(logging.WARNING)
 handler = Mangum(app, lifespan="off")
-

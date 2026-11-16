@@ -1,0 +1,17 @@
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      python: '3.12'
+    commands:
+      - python -m pip install -r requirements-dev.txt -r requirements-lambda.txt cfn-lint
+  pre_build:
+    commands:
+      - ruff check app tests scripts/evaluacion
+      - cfn-lint -r "$AWS_REGION" -t infra/evaluacion/*.yml
+      - python -m pytest -v
+      - python scripts/evaluacion/check_credentials.py
+  build:
+    commands:
+      - python scripts/evaluacion/check_live.py
+
