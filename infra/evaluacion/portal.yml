@@ -45,6 +45,23 @@ Resources:
       LoggingConfig: {LogFormat: JSON, ApplicationLogLevel: INFO, SystemLogLevel: INFO}
       Environment:
         Variables: {APP_ENV: evaluacion, APP_VERSION: !Ref Release, APP_REVISION: !Ref Revision, DEPLOYED_AT: !Ref DeployedAt}
+  ScheduledProbe:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${AWS::StackName}-probe'
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Id: PortalProbe
+          Arn: !GetAtt Portal.Arn
+          Input: '{"source":"portal.scheduler"}'
+  InvokeScheduledProbe:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Portal
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledProbe.Arn
   Api:
     Type: AWS::ApiGatewayV2::Api
     Properties: {Name: !Ref AWS::StackName, ProtocolType: HTTP}
