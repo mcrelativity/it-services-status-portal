@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -8,12 +9,13 @@ from urllib.request import Request, urlopen
 
 from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 BASE_DIR = Path(__file__).resolve().parent
 TIMEOUT_SECONDS = 3
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Portal de Monitoreo de Servicios TI",
@@ -107,7 +109,14 @@ def probe_service(service: dict[str, str]) -> dict[str, object]:
 
 def monitor_services() -> list[dict[str, object]]:
     with ThreadPoolExecutor(max_workers=len(SERVICE_TARGETS)) as executor:
-        return list(executor.map(probe_service, SERVICE_TARGETS))
+        results = list(executor.map(probe_service, SERVICE_TARGETS))
+    for result in results:
+        status = "available" if result["status"] == "Operativo" else "unavailable"
+        logger.info(
+            "service_check %s target=%s code=%s latency_ms=%s checked_at=%s",
+            status, result["name"], result["http_code"], result["latency_ms"], result["checked_at"],
+        )
+    return results
 
 
 def service_summary(services: list[dict[str, object]]) -> dict[str, int]:
@@ -133,7 +142,10 @@ def index(request: FastAPIRequest):
 
 
 @app.get("/health")
-def health():
+def health(response: Response):
+    revision = os.getenv("APP_REVISION")
+    if revision:
+        response.headers["X-Portal-Revision"] = revision
     return {"status": "ok", "version": current_version()}
 
 

@@ -1,0 +1,294 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Portal TI serverless con observabilidad, alarmas y auditoria
+Parameters:
+  ArtifactBucket: {Type: String}
+  CodeKey: {Type: String}
+  CodeVersion: {Type: String}
+  Release: {Type: String}
+  DeployedAt: {Type: String}
+  Revision:
+    Type: String
+    AllowedPattern: '[a-f0-9]{40}'
+Resources:
+  FunctionLog:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/lambda/${AWS::StackName}', RetentionInDays: 14}
+  HttpLog:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}', RetentionInDays: 14}
+  RuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: 'sts:AssumeRole'}
+      Policies:
+        - PolicyName: WritePortalLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}:log-stream:*'
+  Portal:
+    Type: AWS::Lambda::Function
+    DependsOn: FunctionLog
+    Properties:
+      FunctionName: !Ref AWS::StackName
+      Code: {S3Bucket: !Ref ArtifactBucket, S3Key: !Ref CodeKey, S3ObjectVersion: !Ref CodeVersion}
+      Handler: app.lambda_entry.handler
+      Runtime: python3.12
+      Timeout: 10
+      MemorySize: 256
+      Role: !GetAtt RuntimeRole.Arn
+      LoggingConfig: {LogFormat: JSON, ApplicationLogLevel: INFO, SystemLogLevel: INFO}
+      Environment:
+        Variables: {APP_ENV: evaluacion, APP_VERSION: !Ref Release, APP_REVISION: !Ref Revision, DEPLOYED_AT: !Ref DeployedAt}
+  Api:
+    Type: AWS::ApiGatewayV2::Api
+    Properties: {Name: !Ref AWS::StackName, ProtocolType: HTTP}
+  Integration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt Portal.Arn
+      PayloadFormatVersion: '2.0'
+      TimeoutInMillis: 12000
+  Home:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: {ApiId: !Ref Api, RouteKey: 'GET /', Target: !Sub 'integrations/${Integration}'}
+  Health:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: {ApiId: !Ref Api, RouteKey: 'GET /health', Target: !Sub 'integrations/${Integration}'}
+  Services:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: {ApiId: !Ref Api, RouteKey: 'GET /api/services', Target: !Sub 'integrations/${Integration}'}
+  Static:
+    Type: AWS::ApiGatewayV2::Route
+    Properties: {ApiId: !Ref Api, RouteKey: 'GET /static/{proxy+}', Target: !Sub 'integrations/${Integration}'}
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref Api
+      StageName: '$default'
+      AutoDeploy: true
+      DefaultRouteSettings: {ThrottlingRateLimit: 10, ThrottlingBurstLimit: 20}
+      AccessLogSettings:
+        DestinationArn: !GetAtt HttpLog.Arn
+        Format: '{"requestId":"$context.requestId","route":"$context.routeKey","method":"$context.httpMethod","status":"$context.status","responseLatency":"$context.responseLatency","integrationError":"$context.integrationErrorMessage"}'
+  InvokePortal:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Portal
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/$default/GET/*'
+  IncidentKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Cifra las notificaciones del Portal TI
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountAdministration
+            Effect: Allow
+            Principal: {AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'}
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowCloudWatchPublish
+            Effect: Allow
+            Principal: {Service: cloudwatch.amazonaws.com}
+            Action: ['kms:Decrypt', 'kms:GenerateDataKey*']
+            Resource: '*'
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref AWS::AccountId}
+              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AWS::StackName}-*'}
+  IncidentTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-incidentes'
+      KmsMasterKeyId: !GetAtt IncidentKey.Arn
+  IncidentQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-incidentes'
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref IncidentQueue]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: sns.amazonaws.com}
+            Action: sqs:SendMessage
+            Resource: !GetAtt IncidentQueue.Arn
+            Condition: {ArnEquals: {'aws:SourceArn': !Ref IncidentTopic}}
+  IncidentSubscription:
+    Type: AWS::SNS::Subscription
+    DependsOn: QueuePolicy
+    Properties:
+      Protocol: sqs
+      Endpoint: !GetAtt IncidentQueue.Arn
+      TopicArn: !Ref IncidentTopic
+      RawMessageDelivery: true
+  TopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref IncidentTopic]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowProjectAlarms
+            Effect: Allow
+            Principal: {Service: cloudwatch.amazonaws.com}
+            Action: sns:Publish
+            Resource: !Ref IncidentTopic
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref AWS::AccountId}
+              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AWS::StackName}-*'}
+  HttpClientErrors:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn: TopicPolicy
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-http-4xx'
+      AlarmDescription: Tres errores HTTP de cliente en un minuto.
+      Namespace: AWS/ApiGateway
+      MetricName: '4xx'
+      Dimensions: [{Name: ApiId, Value: !Ref Api}]
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref IncidentTopic]
+  HttpServerErrors:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn: TopicPolicy
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-http-5xx'
+      AlarmDescription: Un error HTTP de servidor en un minuto.
+      Namespace: AWS/ApiGateway
+      MetricName: '5xx'
+      Dimensions: [{Name: ApiId, Value: !Ref Api}]
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref IncidentTopic]
+  DependencyFailures:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref FunctionLog
+      FilterPattern: '{ $.message = "*service_check unavailable*" }'
+      MetricTransformations:
+        - {MetricNamespace: !Sub 'PortalTI/${AWS::StackName}', MetricName: DependencyFailures, MetricValue: '1', DefaultValue: 0}
+  DependencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn: [TopicPolicy, DependencyFailures]
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-dependency'
+      AlarmDescription: Al menos tres resultados no disponibles en cinco minutos.
+      Namespace: !Sub 'PortalTI/${AWS::StackName}'
+      MetricName: DependencyFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref IncidentTopic]
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Ref AWS::StackName
+      DashboardBody: !Sub |
+        {"widgets":[
+        {"type":"metric","x":0,"y":0,"width":12,"height":6,"properties":{"region":"${AWS::Region}","title":"API HTTPS · volumen y errores","stat":"Sum","period":60,"metrics":[["AWS/ApiGateway","Count","ApiId","${Api}"],[".","4xx",".","."],[".","5xx",".","."]]}},
+        {"type":"metric","x":12,"y":0,"width":12,"height":6,"properties":{"region":"${AWS::Region}","title":"Latencia de API y Lambda p95","stat":"p95","period":60,"metrics":[["AWS/ApiGateway","Latency","ApiId","${Api}"],["AWS/Lambda","Duration","FunctionName","${Portal}"]]}},
+        {"type":"metric","x":0,"y":6,"width":12,"height":6,"properties":{"region":"${AWS::Region}","title":"Ejecuciones y fallos Lambda","stat":"Sum","period":60,"metrics":[["AWS/Lambda","Invocations","FunctionName","${Portal}"],[".","Errors",".","."],[".","Throttles",".","."]]}},
+        {"type":"metric","x":12,"y":6,"width":12,"height":6,"properties":{"region":"${AWS::Region}","title":"Dependencias · resultados no disponibles","stat":"Sum","period":300,"metrics":[["PortalTI/${AWS::StackName}","DependencyFailures"]]}},
+        {"type":"alarm","x":0,"y":12,"width":24,"height":3,"properties":{"title":"Alarmas del portal","alarms":["${HttpClientErrors.Arn}","${HttpServerErrors.Arn}","${DependencyAlarm.Arn}"]}}
+        ]}
+  AuditBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      VersioningConfiguration: {Status: Enabled}
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: RetencionAuditoria
+            Status: Enabled
+            ExpirationInDays: 90
+            NoncurrentVersionExpiration: {NoncurrentDays: 7}
+  AuditBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AuditBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: RequireTLS
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt AuditBucket.Arn, !Sub '${AuditBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
+          - Sid: TrailBucketAcl
+            Effect: Allow
+            Principal: {Service: cloudtrail.amazonaws.com}
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt AuditBucket.Arn
+            Condition:
+              StringEquals: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${AWS::StackName}'}
+          - Sid: TrailWrite
+            Effect: Allow
+            Principal: {Service: cloudtrail.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub '${AuditBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${AWS::StackName}'
+                s3:x-amz-acl: bucket-owner-full-control
+  Trail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: AuditBucketPolicy
+    Properties:
+      TrailName: !Ref AWS::StackName
+      S3BucketName: !Ref AuditBucket
+      EnableLogFileValidation: true
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      EventSelectors:
+        - {IncludeManagementEvents: true, ReadWriteType: WriteOnly}
+Outputs:
+  Url: {Value: !GetAtt Api.ApiEndpoint}
+  ApiId: {Value: !Ref Api}
+  Function: {Value: !Ref Portal}
+  RuntimeRoleArn: {Value: !GetAtt RuntimeRole.Arn}
+  QueueUrl: {Value: !Ref IncidentQueue}
+  TopicArn: {Value: !Ref IncidentTopic}
+  TrailArn: {Value: !GetAtt Trail.Arn}
+  AuditBucket: {Value: !Ref AuditBucket}
+  Dashboard: {Value: !Ref Dashboard}
