@@ -9,6 +9,7 @@ on:
       - 'feature/**'
       - 'fix/**'
       - 'docs/**'
+      - 'evaluacion/**'
 
 permissions:
   contents: read
