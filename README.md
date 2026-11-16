@@ -62,4 +62,4 @@ Esta rama reúne las versiones públicas del informe y la demostración. El paqu
 
 ### Retiro del entorno al terminar la revisión
 
-Elimina los stacks de pipeline, portal y artefactos, en ese orden y esperando la finalización de cada uno. Los dos buckets se retienen para conservar los artefactos y registros. Verifica la copia de la evidencia y la política de retención antes de decidir su eliminación. El stack original de la Evaluación 3 se administra por separado.
+Elimina los stacks de pipeline, portal y artefactos, en ese orden y esperando la finalización de cada uno. Los dos buckets se retienen para conservar los artefactos y registros. Verifica la copia de la evidencia y la política de retención antes de decidir su eliminación. El stack original de la Evaluación 3 se administra por separado en otras ramas.
