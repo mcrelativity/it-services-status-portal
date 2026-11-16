@@ -94,7 +94,7 @@ Resources:
     Properties:
       Name: !Ref AWS::StackName
       RoleArn: !GetAtt PipelineRole.Arn
-      PipelineType: V1
+      PipelineType: V2
       RestartExecutionOnUpdate: false
       ArtifactStore: {Type: S3, Location: !Ref ArtifactBucket}
       Stages:
